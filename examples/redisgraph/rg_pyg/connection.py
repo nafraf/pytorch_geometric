@@ -1,4 +1,9 @@
 import redis
+from redis.commands.graph import Graph
+from redis.commands.graph.node import Node
+from redis.commands.graph.edge import Edge
+
+from .query_result import QueryResult
 
 graph = None
 GRAPH_ID = "pyg"
@@ -34,4 +39,5 @@ class Connection:
             Query result.
         """
         self.init_connection()
-        return graph.query(query)
+        redisgraph_result = graph.query(query)
+        return QueryResult(self, redisgraph_result)

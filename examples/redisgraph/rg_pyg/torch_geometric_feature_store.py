@@ -12,6 +12,7 @@ class RedisGraphFeatureStore(FeatureStore):
         raise NotImplementedError
 
     def _get_tensor(self, attr: TensorAttr) -> Optional[FeatureTensorType]:
+        print('_get_tensor')
         table_name = attr.group_name
         attr_name = attr.attr_name
         attr_info = self.__get_node_property(table_name, attr_name)
@@ -27,6 +28,8 @@ class RedisGraphFeatureStore(FeatureStore):
         table_name = attr.group_name
         attr_name = attr.attr_name
         indices = attr.index
+        print(f'table_name: {table_name}')
+        print(f'attr_name: {attr_name}')
 
         if indices is None:
             shape = self.get_tensor_size(attr)
