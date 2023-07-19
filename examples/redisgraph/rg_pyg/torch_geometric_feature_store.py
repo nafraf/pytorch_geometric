@@ -15,6 +15,8 @@ class RedisGraphFeatureStore(FeatureStore):
         print('_get_tensor')
         table_name = attr.group_name
         attr_name = attr.attr_name
+        print(f'table_name: {table_name}')
+        print(f'attr_name : {attr_name}')
         attr_info = self.__get_node_property(table_name, attr_name)
         return self.__get_tensor_by_query(attr)
         # if (not attr_info["type"] in [

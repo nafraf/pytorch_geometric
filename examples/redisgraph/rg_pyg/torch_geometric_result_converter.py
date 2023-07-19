@@ -1,4 +1,4 @@
-#from .types import Type
+from .types import Type
 import warnings
 
 
@@ -15,48 +15,93 @@ class TorchGeometricResultConverter:
         self.pos_to_primary_key_dict = {}
         self.warning_messages = set()
         self.unconverted_properties = {}
-        self.properties_to_extract = self.query_result._get_properties_to_extract()
+        # TODO
+        # self.properties_to_extract = self.query_result.
+        #       _get_properties_to_extract()
 
-    def __get_node_property_names(self, table_name):
-        if table_name in self.nodes_property_names_dict:
-            return self.nodes_property_names_dict[table_name]
-        results = self.query_result.connection._get_node_property_names(
-            table_name)
-        self.nodes_property_names_dict[table_name] = results
+    def __get_node_property_names(self, node):
+        results = {}
+        # Let's assume that every node has the same properties
+        # TODO: fix typeval
+        prop_typeval = 'INT64'
+        # use id as primary key
+        results["id"] = {
+            "type": prop_typeval,
+            "dimension": 0,
+            "is_primary_key": True
+        }
+
+        for key, val in sorted(node.properties.items()):
+            # TODO: fix typeval
+            prop_typeval = 'FLOAT'
+            results[key] = {
+                "type": prop_typeval,
+                "dimension": 0,
+                "is_primary_key": False
+            }
+
         return results
 
-    def __populate_nodes_dict_and_deduplicte_edges(self):
-        self.query_result.reset_iterator()
-        while self.query_result.has_next():
-            row = self.query_result.get_next()
-            for i in self.properties_to_extract:
-                column_type, _ = self.properties_to_extract[i]
-                if column_type == Type.NODE.value:
-                    node = row[i]
-                    label = node["_label"]
-                    _id = node["_id"]
-                    self.table_to_label_dict[_id["table"]] = label
+        # if table_name in self.nodes_property_names_dict:
+        #     return self.nodes_property_names_dict[table_name]
+        # results = self.query_result.connection._get_node_property_names(
+        #     table_name)
+        # self.nodes_property_names_dict[table_name] = results
+        # return results
 
-                    if (_id["table"], _id["offset"]) in self.internal_id_to_pos_dict:
-                        continue
+    def __populate_nodes_dict_and_deduplicate_edges(self):
+        # get nodes
+        result_set = self.query_result.get_as_result_set()
 
-                    node_property_names = self.__get_node_property_names(
-                        label)
-
-                    pos, primary_key = self.__extract_properties_from_node(
+        for n in result_set:
+            node = n[0]
+            # only the heterogeneous graph are supported
+            label = node.labels[0]
+            _id = node.id
+            self.table_to_label_dict[_id] = label
+            # if (_id["table"], _id["offset"]) in self.internal_id_to_pos_dict:
+            #     continue
+            node_property_names = self.__get_node_property_names(node)
+            pos, primary_key = self.__extract_properties_from_node(
                         node, label, node_property_names)
+            # self.internal_id_to_pos_dict[(
+            #             _id["table"], _id["offset"])] = pos
+            if label not in self.pos_to_primary_key_dict:
+                self.pos_to_primary_key_dict[label] = {}
+                self.pos_to_primary_key_dict[label][pos] = primary_key
 
-                    self.internal_id_to_pos_dict[(
-                        _id["table"], _id["offset"])] = pos
-                    if label not in self.pos_to_primary_key_dict:
-                        self.pos_to_primary_key_dict[label] = {}
-                    self.pos_to_primary_key_dict[label][pos] = primary_key
 
-                elif column_type == Type.REL.value:
-                    _src = row[i]["_src"]
-                    _dst = row[i]["_dst"]
-                    self.rels[(_src["table"], _src["offset"],
-                               _dst["table"], _dst["offset"])] = row[i]
+        # self.query_result.reset_iterator()
+        # while self.query_result.has_next():
+        #     row = self.query_result.get_next()
+        #     for i in self.properties_to_extract:
+        #         column_type, _ = self.properties_to_extract[i]
+        #         if column_type == Type.NODE.value:
+        #             node = row[i]
+        #             label = node["_label"]
+        #             _id = node["_id"]
+        #             self.table_to_label_dict[_id["table"]] = label
+
+        #             if (_id["table"], _id["offset"]) in self.internal_id_to_pos_dict:
+        #                 continue
+
+        #             node_property_names = self.__get_node_property_names(
+        #                 label)
+
+        #             pos, primary_key = self.__extract_properties_from_node(
+        #                 node, label, node_property_names)
+
+        #             self.internal_id_to_pos_dict[(
+        #                 _id["table"], _id["offset"])] = pos
+        #             if label not in self.pos_to_primary_key_dict:
+        #                 self.pos_to_primary_key_dict[label] = {}
+        #             self.pos_to_primary_key_dict[label][pos] = primary_key
+
+        #         elif column_type == Type.REL.value:
+        #             _src = row[i]["_src"]
+        #             _dst = row[i]["_dst"]
+        #             self.rels[(_src["table"], _src["offset"],
+        #                        _dst["table"], _dst["offset"])] = row[i]
 
     def __extract_properties_from_node(self, node, label, node_property_names):
         pos = None
@@ -64,7 +109,8 @@ class TorchGeometricResultConverter:
         for prop_name in node_property_names:
             # Read primary key
             if node_property_names[prop_name]["is_primary_key"]:
-                primary_key = node[prop_name]
+                print(f'primary_key = {node.id}')
+                primary_key = node.id
 
             # If property is already marked as unconverted, then add it directly without further checks
             if label in self.unconverted_properties and prop_name in self.unconverted_properties[label]:
@@ -79,24 +125,29 @@ class TorchGeometricResultConverter:
                 self.__mark_property_unconverted(label, prop_name)
                 pos = self.__add_unconverted_property(node, label, prop_name)
                 continue
-            if node[prop_name] is None:
-                self.warning_messages.add(
-                    "Property {}.{} has a null value. torch_geometric does not support null values. The property is marked as unconverted."
-                    .format(label, prop_name))
-                self.__mark_property_unconverted(label, prop_name)
-                pos = self.__add_unconverted_property(node, label, prop_name)
-                continue
+            # if node.properties[prop_name] is None:
+            #     self.warning_messages.add(
+            #         "Property {}.{} has a null value. torch_geometric does not support null values. The property is marked as unconverted."
+            #         .format(label, prop_name))
+            #     self.__mark_property_unconverted(label, prop_name)
+            #     pos = self.__add_unconverted_property(node, label, prop_name)
+            #     continue
 
             if node_property_names[prop_name]['dimension'] == 0:
-                curr_value = node[prop_name]
+                if node_property_names[prop_name]["is_primary_key"]:
+                    curr_value = node.id
+                else:
+                    curr_value = node.properties[prop_name]
             else:
                 try:
-                    if node_property_names[prop_name]['type'] == Type.INT64.value:
-                        curr_value = torch.LongTensor(node[prop_name])
+                    if node_property_names[prop_name]["is_primary_key"]:
+                        curr_value = node.id
+                    elif node_property_names[prop_name]['type'] == Type.INT64.value:
+                        curr_value = torch.LongTensor(node.properties[prop_name])
                     elif node_property_names[prop_name]['type'] == Type.DOUBLE.value:
-                        curr_value = torch.FloatTensor(node[prop_name])
+                        curr_value = torch.FloatTensor(node.properties[prop_name])
                     elif node_property_names[prop_name]['type'] == Type.BOOL.value:
-                        curr_value = torch.BoolTensor(node[prop_name])
+                        curr_value = torch.BoolTensor(node.properties[prop_name])
                 except ValueError:
                     self.warning_messages.add(
                         "Property {}.{} cannot be converted to Tensor (likely due to nested list of variable length). The property is marked as unconverted."
@@ -133,7 +184,7 @@ class TorchGeometricResultConverter:
 
     def __add_unconverted_property(self, node, label, prop_name):
         self.unconverted_properties[label][prop_name].append(
-            node[prop_name])
+            node.properties[prop_name])
         return len(self.unconverted_properties[label][prop_name]) - 1
 
     def __mark_property_unconverted(self, label, prop_name):
@@ -250,8 +301,10 @@ class TorchGeometricResultConverter:
         return data, pos_to_primary_key_dict, unconverted_properties, edge_properties
 
     def get_as_torch_geometric(self):
-        self.__populate_nodes_dict_and_deduplicte_edges()
-        self.__populate_edges_dict()
-        result = self.__convert_to_torch_geometric()
-        self.__print_warnings()
+        print('get_as_torch_geometric')
+        result = 'I am working on this... please wait'
+        self.__populate_nodes_dict_and_deduplicate_edges()
+        # self.__populate_edges_dict()
+        # result = self.__convert_to_torch_geometric()
+        # self.__print_warnings()
         return result

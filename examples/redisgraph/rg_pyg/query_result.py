@@ -406,5 +406,12 @@ class QueryResult:
         return self._query_result.getNumTuples()
 
     def get_as_result_set(self):
+        """
+        Get the result as RedisGraph result set
+
+        Returns
+        -------
+        RediGraph result_set
+        """
         self.check_for_query_result_close()
         return self._query_result.result_set
