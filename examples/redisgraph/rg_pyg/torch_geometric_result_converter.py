@@ -1,3 +1,7 @@
+import redis
+from redis.commands.graph import Graph
+from redis.commands.graph.node import Node
+from redis.commands.graph.edge import Edge
 from .types import Type
 import warnings
 
@@ -12,6 +16,7 @@ class TorchGeometricResultConverter:
         self.nodes_property_names_dict = {}
         self.table_to_label_dict = {}
         self.internal_id_to_pos_dict = {}
+        self.internal_id_to_label = {}
         self.pos_to_primary_key_dict = {}
         self.warning_messages = set()
         self.unconverted_properties = {}
@@ -21,6 +26,10 @@ class TorchGeometricResultConverter:
 
     def __get_node_property_names(self, node):
         results = {}
+        label = node.labels[0]
+        if label in self.nodes_property_names_dict:
+            return self.nodes_property_names_dict[label]
+
         # Let's assume that every node has the same properties
         # TODO: fix typeval
         prop_typeval = 'INT64'
@@ -40,6 +49,7 @@ class TorchGeometricResultConverter:
                 "is_primary_key": False
             }
 
+        self.nodes_property_names_dict[label] = results
         return results
 
         # if table_name in self.nodes_property_names_dict:
@@ -50,26 +60,43 @@ class TorchGeometricResultConverter:
         # return results
 
     def __populate_nodes_dict_and_deduplicate_edges(self):
-        # get nodes
+        # get results
         result_set = self.query_result.get_as_result_set()
 
-        for n in result_set:
-            node = n[0]
-            # only the heterogeneous graph are supported
-            label = node.labels[0]
-            _id = node.id
-            self.table_to_label_dict[_id] = label
-            # if (_id["table"], _id["offset"]) in self.internal_id_to_pos_dict:
-            #     continue
-            node_property_names = self.__get_node_property_names(node)
-            pos, primary_key = self.__extract_properties_from_node(
-                        node, label, node_property_names)
-            # self.internal_id_to_pos_dict[(
-            #             _id["table"], _id["offset"])] = pos
-            if label not in self.pos_to_primary_key_dict:
-                self.pos_to_primary_key_dict[label] = {}
-                self.pos_to_primary_key_dict[label][pos] = primary_key
+        # create nodes
+        for row in result_set:
+            for result in row:
+                if isinstance(result, Node):
+                    node = result
+                    # only heterogeneous graphs are supported
+                    label = node.labels[0]
+                    _id = {}
+                    _id["label"] = label
+                    _id["id"] = node.id
+                    self.table_to_label_dict[_id["label"]] = label
+                    if (_id["label"], _id["id"]) in self.internal_id_to_pos_dict:
+                        continue
+                    node_property_names = self.__get_node_property_names(node)
+                    pos, primary_key = self.__extract_properties_from_node(
+                                node, label, node_property_names)
+                    self.internal_id_to_pos_dict[(
+                                _id["label"], _id["id"])] = pos
+                    self.internal_id_to_label[str(node.id)] = label
 
+                    if label not in self.pos_to_primary_key_dict:
+                        self.pos_to_primary_key_dict[label] = {}
+                        self.pos_to_primary_key_dict[label][pos] = primary_key
+
+        # create edges
+        for row in result_set:
+            for result in row:
+                if isinstance(result, Edge):
+                    edge = result
+                    _src_id = edge.src_node
+                    _dst_id = edge.dest_node
+                    _src_label = self.internal_id_to_label[str(_src_id)]
+                    _dst_label = self.internal_id_to_label[str(_dst_id)]
+                    self.rels[(_src_label, _src_id, _dst_label, _dst_id)] = edge
 
         # self.query_result.reset_iterator()
         # while self.query_result.has_next():
@@ -109,7 +136,6 @@ class TorchGeometricResultConverter:
         for prop_name in node_property_names:
             # Read primary key
             if node_property_names[prop_name]["is_primary_key"]:
-                print(f'primary_key = {node.id}')
                 primary_key = node.id
 
             # If property is already marked as unconverted, then add it directly without further checks
@@ -217,17 +243,17 @@ class TorchGeometricResultConverter:
             if dst_label not in self.edges_dict[src_label]:
                 self.edges_dict[src_label][dst_label] = []
             self.edges_dict[src_label][dst_label].append((src_pos, dst_pos))
-            curr_edge_properties = self.rels[r]
+            curr_edge_properties = self.rels[r].properties
             if (src_label, dst_label) not in self.edges_properties:
                 self.edges_properties[src_label, dst_label] = {}
-            for prop_name in curr_edge_properties:
+            # process edge properties
+            for key, val in sorted(curr_edge_properties.items()):
+                prop_name = key
                 if prop_name in ['_src', '_dst', '_id']:
                     continue
                 if prop_name not in self.edges_properties[src_label, dst_label]:
-                    self.edges_properties[src_label, dst_label][prop_name] = [
-                    ]
-                self.edges_properties[src_label, dst_label][prop_name].append(
-                    curr_edge_properties[prop_name])
+                    self.edges_properties[src_label, dst_label][prop_name] = []
+                self.edges_properties[src_label, dst_label][prop_name].append(val)
 
     def __print_warnings(self):
         for message in self.warning_messages:
@@ -239,6 +265,10 @@ class TorchGeometricResultConverter:
         if len(self.nodes_dict) == 0:
             self.warning_messages.add(
                 "No nodes found or all node properties are not converted.")
+
+        if len(self.edges_dict) == 0:
+            self.warning_messages.add(
+                "No edges found or all edge properties are not converted.")
 
         # If there is only one node type, then convert to torch_geometric.data.Data
         # Otherwise, convert to torch_geometric.data.HeteroData
@@ -301,10 +331,8 @@ class TorchGeometricResultConverter:
         return data, pos_to_primary_key_dict, unconverted_properties, edge_properties
 
     def get_as_torch_geometric(self):
-        print('get_as_torch_geometric')
-        result = 'I am working on this... please wait'
         self.__populate_nodes_dict_and_deduplicate_edges()
-        # self.__populate_edges_dict()
-        # result = self.__convert_to_torch_geometric()
-        # self.__print_warnings()
+        self.__populate_edges_dict()
+        result = self.__convert_to_torch_geometric()
+        self.__print_warnings()
         return result
